@@ -1,0 +1,31 @@
+# Fixture: llama.cpp server output, documented format.
+
+This is a log in the format llama.cpp's `llama-server` emits, used to test the
+`measure` path. It is written from the documented output format rather than
+captured on this machine: the build host is Apple Silicon with no CUDA or ROCm
+stack, and no llama.cpp log existed on disk to capture. Where a real log would
+differ, it would differ in values, not in structure.
+
+The two-device section reproduces the imbalance from evidence #1 of
+work order prod-20260929-002: the model buffers differ by roughly 1.4 GiB with
+`--tensor-split 0.667,0.333`, so the tool has a real example to report on.
+
+load_tensors: offloading 80 repeating layers to GPU
+load_tensors: offloaded 80/81 layers to GPU
+llama_model_load: n_ctx                       = 8192
+llama_model_load: tensor_split                = 0.667,0.333
+llama_model_load: main_gpu                    = 0
+llama_model_load: n_gpu_layers                = 80
+llama_model_load: load_model: loading model '/models/llama-3.1-8b-Q4_K_M.gguf'
+llama_kv_cache_init:      CUDA0 KV buffer size =   546.00 MiB
+llama_kv_cache_init:      CUDA1 KV buffer size =     0.00 MiB
+llama_new_context_with_model: KV self size  =  546.00 MiB
+llama_new_context_with_model: CUDA0 model buffer size =  3902.00 MiB
+llama_new_context_with_model: CUDA1 model buffer size =  2462.00 MiB
+llama_new_context_with_model: CUDA0 compute buffer size =   214.00 MiB
+
+llama_print_timings:        load time =    1823.44 ms
+llama_print_timings:      sample time =      12.07 ms /   128 runs   (    0.09 ms per token, 10604.81 tokens per second)
+llama_print_timings: prompt eval time =    1820.55 ms /  1024 tokens (    1.78 ms per token,   562.48 tokens per second)
+llama_print_timings:        eval time =    2679.31 ms /   128 runs   (   20.93 ms per token,    47.78 tokens per second)
+llama_print_timings:       total time =    4702.93 ms /  1152 tokens

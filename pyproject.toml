@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "localfit"
+version = "0.1.0"
+description = "Answer 'will this model run on my hardware, and how fast?' before you download it — fit plans, tok/s ranges, and multi-GPU tensor-split diagnosis."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+localfit = "localfit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/localfit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
