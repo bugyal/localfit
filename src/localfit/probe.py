@@ -105,6 +105,18 @@ _NAME_PATTERNS: tuple[tuple[str, str], ...] = (
     ("b580", "arc-b580-12g"),
 )
 
+# Apple Silicon, most-specific first: "m4 pro" must beat a bare "m4". Kept
+# separate from _NAME_PATTERNS because Apple matching additionally consults the
+# measured unified-memory size (see _apple_tier).
+_APPLE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("m3 ultra", "apple-m3-ultra-192g"),
+    ("m4 max", "apple-m4-max-64g"),
+    ("m4 pro", "apple-m4-pro-24g"),
+    ("m4", "apple-m4-16g"),
+    ("m2 max", "apple-m2-max-64g"),
+    ("m1", "apple-m1-16g"),
+)
+
 
 def match_gpu_by_name(name: str, vram_gb: float = 0.0) -> Gpu | None:
     """Find a catalogue entry for a reported device name.
@@ -165,6 +177,22 @@ def probe(allow_commands: bool = True) -> ProbeResult:
         apple = _apple_gpu(chip, result.system_ram_gb)
         if apple:
             result.gpus.append(apple)
+            if apple.unified_memory:
+                # These two figures are one physical pool: 'system RAM' is the
+                # same allocation as the card's memory, measured from the same
+                # bytes and shown in decimal GB. Unexplained they read as two
+                # budgets (17.2 GB of RAM *plus* a 16 GB card), which invites a
+                # plan that over-commits the machine.
+                result.notes.append(
+                    "Unified memory: 'system RAM' above and the card's 'memory' "
+                    "are the same physical pool, not two budgets — a plan may use "
+                    "at most the card figure. That is the whole allocation, not "
+                    "memory free for inference: leave room for the OS and apps."
+                )
+            # A tier correction is explained in the entry's own note, which the
+            # probe surface does not print, so repeat it here where it is seen.
+            if apple.note and "different tier" in apple.note:
+                result.notes.append(apple.note)
         else:
             result.unknown.append(
                 "Could not map this Apple chip to a catalogue entry; pass --gpu "
@@ -268,21 +296,72 @@ def _parse_rocm_smi(text: str, result: ProbeResult) -> list[Gpu]:
 
 
 def _apple_gpu(chip: str, ram_gb: float) -> Gpu | None:
-    """Map an Apple chip string onto the catalogue."""
+    """Map an Apple chip string onto the catalogue.
+
+    Apple ships the same chip with several memory sizes, and the catalogue holds
+    one entry per tier, so the tier is chosen from the *measured* pool rather
+    than assumed. An M4 Pro with 48 GB planned against the 24 GB entry
+    under-reports capacity by 2x and would refuse models that actually run.
+    """
     lowered = (chip or "").lower()
-    if "m3 ultra" in lowered:
-        return GPUS["apple-m3-ultra-192g"]
-    if "m4 max" in lowered:
-        return GPUS["apple-m4-max-64g"]
-    if "m4 pro" in lowered:
-        return GPUS["apple-m4-pro-24g"]
-    if lowered.startswith("apple m4") or "m4" in lowered:
-        return GPUS["apple-m4-16g"]
-    if "m2 max" in lowered:
-        return GPUS["apple-m2-max-64g"]
-    if "m1" in lowered:
-        return GPUS["apple-m1-16g"]
+    for pattern, key in _APPLE_PATTERNS:
+        if pattern in lowered:
+            base = GPUS[key]
+            return _apple_tier(base, chip, ram_gb)
     return None
+
+
+def _apple_tier(base: Gpu, chip: str, ram_gb: float) -> Gpu:
+    """Apply the measured unified-memory size when it names a different tier.
+
+    Apple ships one chip at several memory sizes and markets them in GiB while
+    printing "GB", so two different things produce a mismatch against the
+    catalogue and they must not be confused:
+
+    - a unit difference (a "64 GB" M4 Max measures 68.7 decimal GB), which is
+      the *same* part and needs no correction; and
+    - a genuinely different tier (a 48 GB M4 Pro against the 24 GB entry),
+      which does, because planning against 24 GB refuses models that run.
+
+    Comparing both in GiB separates them. Bandwidth is per-tier in Apple's
+    line-up, so a corrected entry keeps the catalogue figure and says so rather
+    than presenting it as measured.
+    """
+    if ram_gb <= 0:
+        return base
+    measured_gib = ram_gb * 1e9 / (1024**3)
+    if abs(measured_gib - base.vram_gb) <= 2.0:
+        # Same tier; Apple's printed figure is GiB. Left as-is so plans agree
+        # with what the machine is advertised as.
+        return base
+    # Store the marketed (GiB) figure, not the decimal-GB byte count, so this
+    # entry stays in the same units as the rest of the catalogue — every other
+    # Apple and NVIDIA row is the number on the box. The byte-level measurement
+    # goes in the note so the rounding is visible rather than hidden.
+    nominal = round(measured_gib)
+    note = (
+        f"Memory set from this machine's measured unified pool "
+        f"({ram_gb:.1f} GB = {measured_gib:.0f} GiB), a different tier from the "
+        f"catalogue default for {base.name} ({base.vram_gb:.0f} GB). Bandwidth is "
+        "Apple's figure for the default tier and may not match this one."
+    )
+    if base.note:
+        note = f"{base.note} {note}"
+    return Gpu(
+        key=f"{base.key}-detected-{nominal}g",
+        name=f"{base.name} ({nominal} GB)",
+        arch=base.arch,
+        vram_gb=float(nominal),
+        bandwidth_gbs=base.bandwidth_gbs,
+        tensor_cores=base.tensor_cores,
+        bf16_native=base.bf16_native,
+        fp16_native=base.fp16_native,
+        int8_dp4a=base.int8_dp4a,
+        unified_memory=base.unified_memory,
+        host_ram_gb=float(nominal),
+        note=note,
+        sources=base.sources,
+    )
 
 
 def _sysctl_int(key: str) -> float:

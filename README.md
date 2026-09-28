@@ -30,7 +30,7 @@ $ localfit plan llama-3.1-8b --gpu tesla-p40-24g --quant q4_k_m
 
 **Measured: 47.8 tok/s** (llama-3.1-8b, q4_k_m, ollama)
   source: tinycomputers.io P40 home lab, 4x P40
-  note: fitted entirely on one card; no multi-GPU overhead
+  note: beat a single T4 (35.7) and a quad T4 (29.2) on the same model
 
 The bandwidth ceiling for this configuration is 71.4 tok/s, so the measurement is
 using 67% of what the hardware allows.
@@ -67,6 +67,11 @@ $ localfit probe
 | card | arch | memory | bandwidth |
 |---|---|---|---|
 | Apple M4 | apple-silicon | 16 GB | 120 GB/s |
+
+### Notes
+
+- Apple platform, chip reported as Apple M4.
+- Unified memory: 'system RAM' above and the card's 'memory' are the same physical pool, not two budgets — a plan may use at most the card figure. That is the whole allocation, not memory free for inference: leave room for the OS and apps.
 ```
 
 Omit `--gpu` and `plan` probes for you. Three families are covered, each failing
@@ -74,6 +79,14 @@ differently: NVIDIA via `nvidia-smi`, AMD via `rocm-smi`, Apple Silicon via
 `sysctl`. Anything it cannot identify is reported as an explicit question rather
 than defaulted to a plausible-looking number, because a fit plan computed from
 the wrong VRAM figure is worse than no plan.
+
+On a unified-memory machine the two figures above are deliberately both shown and
+labelled, because they describe **one** physical pool: `16 GB` is the same
+allocation as `17.2 GB`, reported in the decimal GB the rest of the tool uses
+(16 GiB = 17.2 GB). Apple ships one chip at several memory sizes, so the tier is
+chosen from the measured pool rather than assumed — a 48 GB M4 Pro plans against
+48 GB, not the 24 GB catalogue default — and when that differs from the catalogue
+entry the report says so and warns that the entry's bandwidth may not apply.
 
 ### It answers the real question, not the literal one
 
@@ -86,12 +99,15 @@ $ localfit quants llama-3.1-8b --gpu rtx-4060-8g
 
 | quant | bpw | weights | +kv+graph | fits | tok/s | quality |
 |---|---|---|---|---|---|---|
+| f16 | 16 | 16.00 GB | 17.52 GB | no | ~4 | ref |
 | q8_0 | 8.5 | 8.50 GB | 10.02 GB | no | ~15 | +0.002 ppl |
 | q6_k | 6.5625 | 6.56 GB | 8.08 GB | no | ~25 | +0.005 ppl |
 | q5_k_m | 5.6719 | 5.67 GB | 7.19 GB | yes | ~29 | +0.011 ppl |
 | q5_k_s | 5.5156 | 5.52 GB | 7.04 GB | yes | ~30 | +0.022 ppl |
 | q4_k_m | 4.8438 | 4.84 GB | 6.36 GB | yes | ~34 | +0.053 ppl |
 | q4_k_s | 4.5781 | 4.58 GB | 6.10 GB | yes | ~36 | +0.099 ppl |
+...
+| iq1_s | 1.5625 | 1.56 GB | 3.08 GB | yes | ~104 | +1.400 ppl |
 
 Highest-quality scheme that fits: **q5_k_m** (7.19 GB, 0.011 ppl penalty).
 ```
@@ -170,13 +186,16 @@ a slow-but-working load into an OOM.
 ### Read your own logs back
 
 ```console
-$ localfit measure llama-server.log
+$ localfit measure tests/fixtures/llamacpp_server.log
 # localfit — measured run
 
 - model: /models/llama-3.1-8b-Q4_K_M.gguf
 - **generation: 47.78 tok/s** (measured)
+- prompt processing: 562.48 tok/s
 - layers offloaded: 80/81
 - tensor-split in effect: 0.667,0.333
+- main GPU: 0
+- context: 8,192
 - KV cache: 546 MiB
 
 ### Per-device buffers
@@ -187,6 +206,18 @@ $ localfit measure llama-server.log
 | CUDA1 | 2462 MiB |
 
 Spread between fullest and emptiest device: 1440 MiB.
+
+### Notes
+
+- Only 80/81 layers were offloaded: part of this run was CPU-bound, so the tok/s figure understates what this card can do on a smaller model.
+- Device buffers differ by 1440 MiB. That is the imbalance this tool diagnoses: see the multi-GPU section of the report.
+```
+
+A bad path is a usage error (exit 2), not a traceback:
+
+```console
+$ localfit measure llama-server.log
+localfit: no such log file: llama-server.log
 ```
 
 `--contribute out.json` writes a row you can keep or post. Nothing is uploaded:
@@ -209,10 +240,10 @@ $ localfit calibration
 | architecture | samples | mean error | worst error | verdict |
 |---|---|---|---|---|
 | nvidia-pascal | 4 | 59% | 204% | poor — treat the range as a rough order of magnitude |
+| nvidia-ampere | 1 | 17% | 17% | reasonable |
 | apple-silicon | 4 | 12% | 17% | well calibrated |
 | nvidia-turing | 3 | 11% | 18% | well calibrated |
-| nvidia-ampere | 1 | 17% | 17% | reasonable |
-| amd-rdna3 | 0 | - | - | no measurements for this architecture |
+| nvidia-ada | 1 | 0% | 0% | well calibrated |
 ...
 
 No measurements exist for: amd-gcn, amd-rdna2, amd-rdna3, amd-rdna4, cpu,
@@ -251,14 +282,16 @@ that column stops being empty.
 
 ```console
 $ .venv/bin/python -m pytest tests/ -q
-150 passed
+174 passed, 2 skipped
 ```
 
 The suite pins the arithmetic rather than the implementation: the KV formula is
 tested against hand-computed values, every anchor is checked against its
 bandwidth ceiling and for physical plausibility, quantisation tables are asserted
 to be monotonic, and the fit verdict for a given card and model is asserted
-directly.
+directly. The probe is tested against injected `sysctl`/`nvidia-smi`/`rocm-smi`
+output rather than this machine, so the Apple, NVIDIA and AMD paths are covered
+on any host.
 
 ## Layout
 

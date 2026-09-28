@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from . import __version__, hardware, models, quants
 from .multigpu import plan_multi, verify_split
@@ -188,7 +189,18 @@ def cmd_probe(args) -> int:
 
 
 def cmd_measure(args) -> int:
-    measurement = parse_log_file(args.logfile)
+    # A missing or unreadable log is a usage mistake, not a crash: without this
+    # the FileNotFoundError escapes as a raw traceback, which reads as a bug in
+    # the tool rather than a wrong path.
+    path = Path(args.logfile)
+    if not path.exists():
+        raise UsageError(f"no such log file: {args.logfile}")
+    if path.is_dir():
+        raise UsageError(f"{args.logfile} is a directory, not a log file")
+    try:
+        measurement = parse_log_file(path)
+    except OSError as exc:
+        raise UsageError(f"could not read {args.logfile}: {exc.strerror or exc}") from exc
     if args.json:
         print(json.dumps(measurement.to_dict(), indent=2))
     else:

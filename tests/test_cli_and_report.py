@@ -54,6 +54,36 @@ class TestExitCodes:
         bad.write_text("nothing to see")
         assert cli.main(["measure", str(bad)]) == cli.EXIT_DOES_NOT_FIT
 
+    def test_measure_of_a_missing_log_is_a_usage_error_not_a_crash(self, capsys):
+        """A wrong path must read as a wrong path, not as a bug in the tool."""
+        code = cli.main(["measure", "/nonexistent/llama-server.log"])
+        assert code == cli.EXIT_USAGE
+        err = capsys.readouterr().err
+        assert "no such log file" in err
+        assert "Traceback" not in err
+
+    def test_measure_of_a_directory_is_a_usage_error(self, tmp_path, capsys):
+        code = cli.main(["measure", str(tmp_path)])
+        assert code == cli.EXIT_USAGE
+        assert "directory" in capsys.readouterr().err
+
+    def test_measure_of_an_unreadable_file_is_a_usage_error(self, tmp_path, capsys):
+        """Permission errors are reported, not raised as a traceback."""
+        import os
+        import stat as _stat
+
+        if os.geteuid() == 0:
+            pytest.skip("root ignores file permissions")
+        p = tmp_path / "unreadable.log"
+        p.write_text("llama_print_timings: eval time = 100 ms / 10 tokens\n")
+        p.chmod(0o000)
+        try:
+            code = cli.main(["measure", str(p)])
+            assert code == cli.EXIT_USAGE
+            assert "Traceback" not in capsys.readouterr().err
+        finally:
+            p.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
+
 
 class TestPlanOutput:
     def test_default_picks_a_quant_that_fits_and_says_so(self, capsys):
