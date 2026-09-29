@@ -100,6 +100,31 @@ def test_readme_example_matches_real_output(cmd: str, expected: str) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "host_dependent", ["probe"], ids=lambda c: f"localfit {c}"
+)
+def test_host_dependent_commands_are_not_replay_blocks(host_dependent: str) -> None:
+    """Commands whose output describes *this machine* must never sit in a
+    ```console block.
+
+    Console blocks are replayed by ``test_readme_example_matches_real_output``
+    on every host CI picks — a pasted probe example is one specific machine's
+    hardware and can only pass on that machine (0.1.0 shipped its author's
+    Apple M4 inside a console block and broke CI on Linux). Paste it as an
+    ```output sample instead.
+    """
+    text = README.read_text(encoding="utf-8")
+    for block in re.findall(r"```console\n(.*?)```", text, re.S):
+        for line in block.splitlines():
+            if line.startswith(f"$ localfit {host_dependent}"):
+                pytest.fail(
+                    f"`localfit {host_dependent}` is host-specific and must not "
+                    "appear in a ```console block (it is replayed in CI on "
+                    "machines whose hardware differs). Use an ```output sample "
+                    "block instead."
+                )
+
+
 def test_readme_states_the_true_test_count() -> None:
     """The README quotes a pass/skip summary; it must match reality.
 

@@ -57,7 +57,11 @@ Requires Python 3.11 or newer. No runtime dependencies.
 
 ### It finds your hardware
 
-```console
+Output is machine-specific by design — probe's whole job is to describe the
+machine it runs on, so the block below is one real machine (an Apple Silicon
+Mac) shown as a sample, not a promise your output will match it:
+
+```output
 $ localfit probe
 # localfit — detected hardware
 
